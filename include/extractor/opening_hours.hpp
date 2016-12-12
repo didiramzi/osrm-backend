@@ -15,18 +15,6 @@
 #include <limits>
 #include <string>
 
-std::ostream &operator<<(std::ostream &stream, const struct tm &value)
-{
-    char s[128];
-    strftime(s, sizeof(s), "%a, %d %b %Y %T %z", &value);
-    return stream << s;
-}
-
-std::ostream &operator<<(std::ostream &stream, const std::pair<struct tm, struct tm> &value)
-{
-    return stream << value.first << "-" << value.second;
-}
-
 namespace osrm
 {
 namespace extractor
@@ -103,8 +91,6 @@ struct OpeningHours
     };
 
     OpeningHours() : modifier(open) {}
-
-    bool IsOpen(const struct tm &tm) const { return false; }
 
     std::vector<TimeSpan> times;
     std::vector<WeekdayRange> weekdays;
@@ -449,6 +435,7 @@ inline std::vector<OpeningHours> parseOpeningHours(const std::string &s)
     bool ok =
         boost::spirit::qi::phrase_parse(iter, s.end(), grammar, boost::spirit::qi::blank, result);
 
+    // TODO: remove debug
     if (!ok || iter != s.end())
         std::cout << "failed at " << std::string(iter, s.end()) << "\n";
     else
@@ -457,11 +444,14 @@ inline std::vector<OpeningHours> parseOpeningHours(const std::string &s)
     for (auto x : result)
         std::cout << "    " << x << "\n";
 
-    return ok && iter == s.end();
+    return result;
 }
 
-inline bool checkOpeningHours(const std::vector<OpeningHours>& input)
+inline bool checkOpeningHours(const std::vector<OpeningHours>& input, const struct tm& time)
 {
+    // TODO: add check
+    (void)input;
+    (void)time;
     return true;
 }
 
