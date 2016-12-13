@@ -241,7 +241,6 @@ bool MergableRoadDetector::HaveSameDirection(const NodeID intersection_node,
 
     const auto are_parallel = util::coordinate_calculation::areParallel(coordinates_to_the_left,
                                                                         coordinates_to_the_right);
-
     return are_parallel;
 }
 

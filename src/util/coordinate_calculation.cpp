@@ -444,7 +444,7 @@ bool areParallel(const std::vector<util::Coordinate> &lhs, const std::vector<uti
 
     const auto ratio = compute_ratio(slope_lhs, slope_rhs);
     // for small values, ratios are easily off, so we use absolute differences for them
-    return ratio < 1.15 || std::abs(slope_lhs - slope_rhs) < 0.2;
+    return ratio < 1.15 || std::abs(slope_lhs - slope_rhs) < 0.3;
 }
 
 } // ns coordinate_calculation
