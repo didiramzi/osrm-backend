@@ -220,3 +220,15 @@ Feature: Car - Restricted access
         Then routability should be
             | highway | toll        | bothw |
             | primary | yes         |       |
+
+
+     Scenario: Car - barrier=gate should be routed over unless explicitely forbidden
+        Then routability should be
+            | node/barrier | access     | bothw |
+            | gate         |            | x     |
+            | gate         | no         |       |
+            | gate         | yes        | x     |
+            | gate         | permissive | x     |
+            | gate         | designated | x     |
+            | gate         | private    |       |
+            | gate         | garbagetag | x     |
