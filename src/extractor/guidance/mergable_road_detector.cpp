@@ -121,7 +121,7 @@ bool MergableRoadDetector::IsNarrowTriangle(const NodeID intersection_node,
     // Standard following the straightmost road
     // Since both items have the same id, we can `select` based on any setup
     SelectStraightmostRoadByNameAndOnlyChoice selector(
-        node_based_graph.GetEdgeData(lhs.eid).name_id, false);
+        node_based_graph.GetEdgeData(lhs.eid).name_id, lhs.bearing, false);
 
     NodeBasedGraphWalker graph_walker(node_based_graph, intersection_generator);
     graph_walker.TraverseRoad(intersection_node, lhs.eid, left_accumulator, selector);
@@ -203,7 +203,7 @@ bool MergableRoadDetector::HaveSameDirection(const NodeID intersection_node,
         LengthLimitedCoordinateAccumulator accumulator(
             coordinate_extractor, node_based_graph, max_length);
         SelectStraightmostRoadByNameAndOnlyChoice selector(
-            node_based_graph.GetEdgeData(edge_id).name_id, false);
+            node_based_graph.GetEdgeData(edge_id).name_id, lhs.bearing, false);
         graph_walker.TraverseRoad(intersection_node, edge_id, accumulator, selector);
 
         return std::make_pair(accumulator.accumulated_length, accumulator.coordinates);
