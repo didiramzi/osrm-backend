@@ -13,6 +13,9 @@
 #include <numeric>
 #include <utility>
 
+#include <iomanip>
+#include <sstream>
+
 namespace osrm
 {
 namespace util
@@ -351,12 +354,13 @@ leastSquareRegression(const std::vector<util::Coordinate> &coordinates)
         return {intercept + slope * static_cast<double>((longitude))};
     };
 
+    const double offset = 0.00001;
     const util::Coordinate regression_first = {
-        toFixed(util::FloatLongitude{min_lon - 1}),
-        toFixed(util::FloatLatitude(GetLatAtLon(util::FloatLongitude{min_lon - 1})))};
+        toFixed(util::FloatLongitude{min_lon - offset}),
+        toFixed(util::FloatLatitude(GetLatAtLon(util::FloatLongitude{min_lon - offset})))};
     const util::Coordinate regression_end = {
-        toFixed(util::FloatLongitude{max_lon + 1}),
-        toFixed(util::FloatLatitude(GetLatAtLon(util::FloatLongitude{max_lon + 1})))};
+        toFixed(util::FloatLongitude{max_lon + offset}),
+        toFixed(util::FloatLatitude(GetLatAtLon(util::FloatLongitude{max_lon + offset})))};
 
     return {regression_first, regression_end};
 }
@@ -422,7 +426,7 @@ bool areParallel(const std::vector<util::Coordinate> &lhs, const std::vector<uti
     const auto regression_lhs = leastSquareRegression(lhs);
     const auto regression_rhs = leastSquareRegression(rhs);
 
-    auto get_slope = [](const util::Coordinate from, const util::Coordinate to) {
+    const auto get_slope = [](const util::Coordinate from, const util::Coordinate to) {
         const auto diff_lat = static_cast<int>(from.lat) - static_cast<int>(to.lat);
         const auto diff_lon = static_cast<int>(from.lon) - static_cast<int>(to.lon);
         if (diff_lon == 0)
@@ -430,8 +434,29 @@ bool areParallel(const std::vector<util::Coordinate> &lhs, const std::vector<uti
         return static_cast<double>(diff_lat) / static_cast<double>(diff_lon);
     };
 
-    const auto slope_lhs = get_slope(regression_lhs.first, regression_lhs.second);
-    const auto slope_rhs = get_slope(regression_rhs.first, regression_rhs.second);
+    const auto print_coord = [](const Coordinate coord) {
+        std::ostringstream oss;
+        oss << std::setprecision(12) << util::toFloating(coord.lat) << " "
+                  << util::toFloating(coord.lon);
+        return oss.str();
+    };
+
+    const auto null_island = Coordinate(FixedLongitude{0}, FixedLatitude{0});
+    const auto difference_lhs = difference(regression_lhs.first, regression_lhs.second);
+    const auto difference_rhs = difference(regression_rhs.first, regression_rhs.second);
+
+    // we normalise the left slope to be zero, so we rotate the coordinates around 0,0 to match 90
+    // degrees
+    const auto bearing_lhs = bearing(null_island, difference_lhs);
+
+    // we rotate to have one of the lines facing horizontally to the right (bearing 90 degree)
+    const auto rotation_angle_radians = degToRad(bearing_lhs - 90);
+
+    const auto rotated_difference_lhs = rotateCCWAroundZero(difference_lhs, rotation_angle_radians);
+    const auto rotated_difference_rhs = rotateCCWAroundZero(difference_rhs, rotation_angle_radians);
+
+    const auto slope_lhs = get_slope(null_island, rotated_difference_lhs);
+    const auto slope_rhs = get_slope(null_island, rotated_difference_rhs);
 
     const auto compute_ratio = [](auto dividend, auto divisor) {
         if (std::abs(dividend) < std::abs(divisor))
@@ -442,9 +467,42 @@ bool areParallel(const std::vector<util::Coordinate> &lhs, const std::vector<uti
         return dividend / save_divisor;
     };
 
+    const auto slope_lhs_2 = get_slope(regression_lhs.first, regression_lhs.second);
+    const auto slope_rhs_2 = get_slope(regression_rhs.first, regression_rhs.second);
+
     const auto ratio = compute_ratio(slope_lhs, slope_rhs);
-    // for small values, ratios are easily off, so we use absolute differences for them
-    return ratio < 1.15 || std::abs(slope_lhs - slope_rhs) < 0.3;
+
+    // the left hand side has a slope of `0` after the rotation. We can check the slope of the right hand side to ensure we only considering slight slopes
+    return std::abs(slope_rhs) < 0.1;   //ten percent incline at the most
+}
+
+Coordinate rotateCCWAroundZero(Coordinate coordinate, double angle_in_radians)
+{
+    /*
+     * a rotation  around 0,0 in vector space is defined as
+     *
+     * | cos a   -sin a | . | lon |
+     * | sin a    cos a |   | lat |
+     *
+     * resulting in cos a lon - sin a lon for the new longitude and sin a lon + cos a lat for the
+     * new latitude
+     */
+
+    const auto cos_alpha = cos(angle_in_radians);
+    const auto sin_alpha = sin(angle_in_radians);
+
+    const auto lon = static_cast<double>(toFloating(coordinate.lon));
+    const auto lat = static_cast<double>(toFloating(coordinate.lat));
+
+    return {util::FloatLongitude{cos_alpha * lon - sin_alpha * lat},
+            util::FloatLatitude{sin_alpha * lon + cos_alpha * lat}};
+}
+
+Coordinate difference(const Coordinate lhs, const Coordinate rhs)
+{
+    const auto lon_diff_int = static_cast<int>(lhs.lon) - static_cast<int>(rhs.lon);
+    const auto lat_diff_int = static_cast<int>(lhs.lat) - static_cast<int>(rhs.lat);
+    return {util::FixedLongitude{lon_diff_int}, util::FixedLatitude{lat_diff_int}};
 }
 
 } // ns coordinate_calculation
