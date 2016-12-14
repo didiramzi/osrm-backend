@@ -140,14 +140,10 @@ operator()(const NodeID /*nid*/,
 
     const auto is_valid_choice = !requires_entry || min_element->entry_allowed;
     const auto has_valid_angle =
-        (intersection.size() == 2 ||
-         intersection.findClosestTurn(STRAIGHT_ANGLE) == min_element &&
-             angularDeviation(min_element->angle, STRAIGHT_ANGLE) < NARROW_TURN_ANGLE) &&
+        ((intersection.size() == 2 ||
+          intersection.findClosestTurn(STRAIGHT_ANGLE) == min_element) &&
+         angularDeviation(min_element->angle, STRAIGHT_ANGLE) < NARROW_TURN_ANGLE) &&
         angularDeviation(initial_bearing, min_element->angle) < NARROW_TURN_ANGLE;
-
-    std::cout << "Bearing: " << min_element->bearing << " General Direction: " << initial_bearing
-              << std::endl;
-    std::cout << "Valid Angle: " << has_valid_angle << std::endl;
 
     if (!is_valid_choice || !has_valid_angle)
         return {};
