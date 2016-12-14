@@ -321,33 +321,114 @@ bool isCCW(const Coordinate first_coordinate,
     return signedArea(first_coordinate, second_coordinate, third_coordinate) > 0;
 }
 
-std::pair<util::Coordinate, util::Coordinate>
-leastSquareRegression(const std::vector<util::Coordinate> &coordinates)
+std::pair<Coordinate, Coordinate> leastSquareRegression(const std::vector<Coordinate> &coordinates)
 {
+    // following the formulas of https://faculty.elgin.edu/dkernler/statistics/ch04/4-2.html
     BOOST_ASSERT(coordinates.size() >= 2);
-    double sum_lon = 0, sum_lat = 0, sum_lon_lat = 0, sum_lon_lon = 0;
-    double min_lon = static_cast<double>(toFloating(coordinates.front().lon));
-    double max_lon = static_cast<double>(toFloating(coordinates.front().lon));
-    for (const auto coord : coordinates)
+    const auto extract_lon = [](const Coordinate coordinate) {
+        return static_cast<double>(toFloating(coordinate.lon));
+    };
+
+    const auto extract_lat = [](const Coordinate coordinate) {
+        return static_cast<double>(toFloating(coordinate.lat));
+    };
+
+    double min_lon = extract_lon(coordinates.front());
+    double max_lon = extract_lon(coordinates.front());
+
+    for (const auto c : coordinates)
     {
-        min_lon = std::min(min_lon, static_cast<double>(toFloating(coord.lon)));
-        max_lon = std::max(max_lon, static_cast<double>(toFloating(coord.lon)));
-        sum_lon += static_cast<double>(toFloating(coord.lon));
-        sum_lon_lon +=
-            static_cast<double>(toFloating(coord.lon)) * static_cast<double>(toFloating(coord.lon));
-        sum_lat += static_cast<double>(toFloating(coord.lat));
-        sum_lon_lat +=
-            static_cast<double>(toFloating(coord.lon)) * static_cast<double>(toFloating(coord.lat));
+        const auto lon = extract_lon(c);
+        min_lon = std::min(min_lon, lon);
+        max_lon = std::max(max_lon, lon);
     }
 
-    const auto dividend = coordinates.size() * sum_lon_lat - sum_lon * sum_lat;
-    const auto divisor = coordinates.size() * sum_lon_lon - sum_lon * sum_lon;
-    if (std::abs(divisor) < std::numeric_limits<double>::epsilon())
-        return std::make_pair(coordinates.front(), coordinates.back());
+    // very small difference in longitude -> would result in inaccurate calculation, check if lat is
+    // better
+    if (max_lon - min_lon < 0.0001)
+    {
+        double min_lat = extract_lat(coordinates.front());
+        double max_lat = extract_lat(coordinates.front());
 
-    // slope of the regression line
-    const auto slope = dividend / divisor;
-    const auto intercept = (sum_lat - slope * sum_lon) / coordinates.size();
+        for (const auto c : coordinates)
+        {
+            const auto lat = extract_lat(c);
+            min_lat = std::min(min_lat, lat);
+            max_lat = std::max(max_lat, lat);
+        }
+        if (max_lat - min_lat > 0.0005)
+        {
+            std::vector<util::Coordinate> rotated_coordinates(coordinates.size());
+            // rotate all coordinates to the right
+            std::transform(coordinates.begin(),
+                           coordinates.end(),
+                           rotated_coordinates.begin(),
+                           [](const auto coordinate) {
+                               return rotateCCWAroundZero(coordinate, degToRad(-90));
+                           });
+            const auto rotated_regression = leastSquareRegression(rotated_coordinates);
+            return {rotateCCWAroundZero(rotated_regression.first, degToRad(90)),
+                    rotateCCWAroundZero(rotated_regression.second, degToRad(90))};
+        }
+    }
+
+    const auto make_accumulate = [](const auto extraction_function) {
+        return [extraction_function](const double sum_so_far, const Coordinate coordinate) {
+            return sum_so_far + extraction_function(coordinate);
+        };
+    };
+
+    const auto accumulated_lon =
+        std::accumulate(coordinates.begin(), coordinates.end(), 0., make_accumulate(extract_lon));
+
+    const auto accumulated_lat =
+        std::accumulate(coordinates.begin(), coordinates.end(), 0., make_accumulate(extract_lat));
+
+    const auto mean_lon = accumulated_lon / coordinates.size();
+    const auto mean_lat = accumulated_lat / coordinates.size();
+
+    const auto make_variance = [](const auto mean, const auto extraction_function) {
+        return [extraction_function, mean](const double sum_so_far, const Coordinate coordinate) {
+            const auto difference = extraction_function(coordinate) - mean;
+            return sum_so_far + difference * difference;
+        };
+    };
+
+    // using the unbiased version, we divide by num_samples - 1 (see
+    // http://mathworld.wolfram.com/SampleVariance.html)
+    const auto sample_variance_lon =
+        sqrt(std::accumulate(
+                 coordinates.begin(), coordinates.end(), 0., make_variance(mean_lon, extract_lon)) /
+             (coordinates.size() - 1));
+
+    // if we don't change longitude, return the vertical line as is
+    if (std::abs(sample_variance_lon) <
+        std::numeric_limits<decltype(sample_variance_lon)>::epsilon())
+        return {coordinates.front(), coordinates.back()};
+
+    const auto sample_variance_lat =
+        sqrt(std::accumulate(
+                 coordinates.begin(), coordinates.end(), 0., make_variance(mean_lat, extract_lat)) /
+             (coordinates.size() - 1));
+
+    if (std::abs(sample_variance_lat) <
+        std::numeric_limits<decltype(sample_variance_lat)>::epsilon())
+        return {coordinates.front(), coordinates.back()};
+
+    const auto linear_correlation =
+        std::accumulate(coordinates.begin(),
+                        coordinates.end(),
+                        0.,
+                        [&](const auto sum_so_far, const auto current_coordinate) {
+                            return sum_so_far +
+                                   (extract_lon(current_coordinate) - mean_lon) *
+                                       (extract_lat(current_coordinate) - mean_lat) /
+                                       (sample_variance_lon * sample_variance_lat);
+                        }) /
+        (coordinates.size() - 1);
+
+    const auto slope = linear_correlation * sample_variance_lat / sample_variance_lon;
+    const auto intercept = mean_lat - slope * mean_lon;
 
     const auto GetLatAtLon = [intercept,
                               slope](const util::FloatLongitude longitude) -> util::FloatLatitude {
@@ -355,10 +436,10 @@ leastSquareRegression(const std::vector<util::Coordinate> &coordinates)
     };
 
     const double offset = 0.00001;
-    const util::Coordinate regression_first = {
+    const Coordinate regression_first = {
         toFixed(util::FloatLongitude{min_lon - offset}),
         toFixed(util::FloatLatitude(GetLatAtLon(util::FloatLongitude{min_lon - offset})))};
-    const util::Coordinate regression_end = {
+    const Coordinate regression_end = {
         toFixed(util::FloatLongitude{max_lon + offset}),
         toFixed(util::FloatLatitude(GetLatAtLon(util::FloatLongitude{max_lon + offset})))};
 
@@ -375,8 +456,7 @@ double findClosestDistance(const Coordinate coordinate,
 }
 
 // find the closest distance between a coordinate and a set of coordinates
-double findClosestDistance(const Coordinate coordinate,
-                           const std::vector<util::Coordinate> &coordinates)
+double findClosestDistance(const Coordinate coordinate, const std::vector<Coordinate> &coordinates)
 {
     double current_min = std::numeric_limits<double>::max();
 
@@ -392,8 +472,7 @@ double findClosestDistance(const Coordinate coordinate,
 }
 
 // find the closes distance between two sets of coordinates
-double findClosestDistance(const std::vector<util::Coordinate> &lhs,
-                           const std::vector<util::Coordinate> &rhs)
+double findClosestDistance(const std::vector<Coordinate> &lhs, const std::vector<Coordinate> &rhs)
 {
     double current_min = std::numeric_limits<double>::max();
 
@@ -406,10 +485,10 @@ double findClosestDistance(const std::vector<util::Coordinate> &lhs,
     return current_min;
 }
 
-std::vector<double> getDeviations(const std::vector<util::Coordinate> &from,
-                                  const std::vector<util::Coordinate> &to)
+std::vector<double> getDeviations(const std::vector<Coordinate> &from,
+                                  const std::vector<Coordinate> &to)
 {
-    auto find_deviation = [&to](const util::Coordinate coordinate) {
+    auto find_deviation = [&to](const Coordinate coordinate) {
         return findClosestDistance(coordinate, to);
     };
 
@@ -421,12 +500,12 @@ std::vector<double> getDeviations(const std::vector<util::Coordinate> &from,
     return deviations_from;
 }
 
-bool areParallel(const std::vector<util::Coordinate> &lhs, const std::vector<util::Coordinate> &rhs)
+bool areParallel(const std::vector<Coordinate> &lhs, const std::vector<Coordinate> &rhs)
 {
     const auto regression_lhs = leastSquareRegression(lhs);
     const auto regression_rhs = leastSquareRegression(rhs);
 
-    const auto get_slope = [](const util::Coordinate from, const util::Coordinate to) {
+    const auto get_slope = [](const Coordinate from, const Coordinate to) {
         const auto diff_lat = static_cast<int>(from.lat) - static_cast<int>(to.lat);
         const auto diff_lon = static_cast<int>(from.lon) - static_cast<int>(to.lon);
         if (diff_lon == 0)
@@ -434,12 +513,14 @@ bool areParallel(const std::vector<util::Coordinate> &lhs, const std::vector<uti
         return static_cast<double>(diff_lat) / static_cast<double>(diff_lon);
     };
 
+    /*
     const auto print_coord = [](const Coordinate coord) {
         std::ostringstream oss;
-        oss << std::setprecision(12) << util::toFloating(coord.lat) << " "
-                  << util::toFloating(coord.lon);
+        oss << std::setprecision(12) << "[" << util::toFloating(coord.lon) << ", "
+            << util::toFloating(coord.lat) << "]";
         return oss.str();
     };
+    */
 
     const auto null_island = Coordinate(FixedLongitude{0}, FixedLatitude{0});
     const auto difference_lhs = difference(regression_lhs.first, regression_lhs.second);
@@ -452,28 +533,15 @@ bool areParallel(const std::vector<util::Coordinate> &lhs, const std::vector<uti
     // we rotate to have one of the lines facing horizontally to the right (bearing 90 degree)
     const auto rotation_angle_radians = degToRad(bearing_lhs - 90);
 
-    const auto rotated_difference_lhs = rotateCCWAroundZero(difference_lhs, rotation_angle_radians);
+    //const auto rotated_difference_lhs = rotateCCWAroundZero(difference_lhs, rotation_angle_radians);
     const auto rotated_difference_rhs = rotateCCWAroundZero(difference_rhs, rotation_angle_radians);
 
-    const auto slope_lhs = get_slope(null_island, rotated_difference_lhs);
+    //const auto slope_lhs = get_slope(null_island, rotated_difference_lhs);
     const auto slope_rhs = get_slope(null_island, rotated_difference_rhs);
 
-    const auto compute_ratio = [](auto dividend, auto divisor) {
-        if (std::abs(dividend) < std::abs(divisor))
-            std::swap(dividend, divisor);
-        auto save_divisor = (std::abs(divisor) < std::numeric_limits<decltype(divisor)>::epsilon())
-                                ? std::numeric_limits<decltype(divisor)>::epsilon()
-                                : divisor;
-        return dividend / save_divisor;
-    };
-
-    const auto slope_lhs_2 = get_slope(regression_lhs.first, regression_lhs.second);
-    const auto slope_rhs_2 = get_slope(regression_rhs.first, regression_rhs.second);
-
-    const auto ratio = compute_ratio(slope_lhs, slope_rhs);
-
-    // the left hand side has a slope of `0` after the rotation. We can check the slope of the right hand side to ensure we only considering slight slopes
-    return std::abs(slope_rhs) < 0.1;   //ten percent incline at the most
+    // the left hand side has a slope of `0` after the rotation. We can check the slope of the right
+    // hand side to ensure we only considering slight slopes
+    return std::abs(slope_rhs) < 0.20; // twenty percent incline at the most
 }
 
 Coordinate rotateCCWAroundZero(Coordinate coordinate, double angle_in_radians)
